@@ -4,6 +4,12 @@ A terminal emulator written in MetaScript. It gets its VT from **libghostty-vt**
 with **void2d**, and runs in an **Ion** window, on Windows, macOS and Linux with the same pixels
 everywhere.
 
+It is a **Neon app whose only child is one `<Void>` filling the window**, the shape
+`~/metascript/neon/docs/VISION.md` gives a game: Ion → Neon → Void. The chrome (tabs, splits,
+settings, command palette) is Neon `Text`/`View` inside that Void area, so it is void2d too. The
+grid is void2d nodes that terminator updates directly from dirty rows, with no reconcile pass.
+There is no webview.
+
 ## Why it exists
 
 Two goals, and the second is as important as the first.
@@ -31,10 +37,30 @@ dependencies only.
 | **Void / void2d** | the renderer: a retained 2D node tree over sokol_gfx, one GLSL source for Metal, D3D11, GL/GLES3, WebGPU and WebGL2 |
 | **Ion** | the desktop runtime: window, event loop, a native render surface, input |
 | **libghostty-vt** | the VT emulation library extracted from Ghostty |
-| **Neon** | the MetaScript UI framework; not used for the grid (see Open) |
+| **Neon** | the app: components, fine-grained reactive state, the chrome; the grid sits inside its `<Void>` |
 
-Ion hands out a surface and input events and never draws. The glue between Ion's surface and void2d
-belongs to Terminator.
+Ion hands out a surface and input events and never draws. The glue between them is not
+terminator's. Void drives a surface that its host hands it, and Neon binds an Ion window to a
+`<Void>` root. Terminator is their first consumer on the desktop.
+
+## What unblocks the first window
+
+Measured 2026-09-23 against ion `32bb557`, void `0167080` and neon `6dd27ac`:
+
+1. **Void: a Windows embed driver.** It is the host-driven counterpart of `void/src/sokol/bridgeIos.m`
+   and `bridgeAndroid.c` (`voidEmbedInit` / `voidEmbedResize` / `voidEmbedFrame`), drawing on a
+   consumer-created composition swapchain (`.inbox/void/2026-09-23-ion-windows-render-surface.md`).
+   Today Void on Windows owns its own window through sokol_app (`src/sokol/gpu.ms`). The GPU state
+   is split per surface from the start: a shared device, and a swapchain for each `<Void>`.
+2. **Neon: a desktop entry.** It binds an Ion window and its surface to one full-window `<Void>`
+   root, and forwards key, text, IME, focus and resize into the void host. None of this exists yet.
+3. **Ion: a frame clock.** Ion has none; the MS loop polls (`ion/docs/RENDER-SURFACE.md` "Driving
+   the renderer"). A truly idle frame needs a vsync source, such as a DXGI waitable object or
+   `DwmFlush`. A surface with its own frame, and input per surface, are not needed by a
+   full-window app.
+
+Terminator's own core does not wait on any of them: ConPTY, libghostty-vt and a headless snapshot
+of the render state.
 
 ## libghostty-vt — only the parts we need
 
@@ -83,11 +109,5 @@ Kitty graphics is a later decision.
 
 ## Open
 
-- **Neon or void2d directly for the chrome.** The grid is drawn straight on void2d, since it needs
-  no component model. Tabs, splits, a settings panel and a command palette could be Neon on Void,
-  or Ion's webview.
-- **Ion's surface on Windows**: a child window or a DirectComposition swapchain. This matters only
-  if a webview ever sits above or below the grid.
-- **Ion's input contract** for keys, text, IME, focus and DPI. Terminator is its first consumer.
 - **A web build.** void2d already builds for WebGPU and WebGL2, and libghostty-vt has a wasm
   target. Not a goal yet.
